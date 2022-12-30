@@ -79,6 +79,11 @@ namespace JsonToDataSet
         /// </summary>
         public static CultureInfo CultureInf { get; set; } = CultureInfo.GetCultureInfoByIetfLanguageTag(CultureInfo.CurrentCulture.IetfLanguageTag);
 
+        /// <summary>
+        /// Is set to True, Parsing will be multithreaded, which should improve speed on large Json data
+        /// </summary>
+        public bool MultiThreadComputation { get; set; } = true;
+
         #endregion
 
         #region PUBLIC METHODS
@@ -115,6 +120,7 @@ namespace JsonToDataSet
         /// <returns></returns>
         public DataSet JsonToDataSet()
         {
+            DateTime dtStart = DateTime.Now;
             try
             {
                 LoadJson(new CancellationToken());
@@ -123,10 +129,19 @@ namespace JsonToDataSet
             {
                 SetDataSetError(true);
             }
+            DateTime dtStop = DateTime.Now;
+
+            string sDiffCompute = (dtStop - dtStart).TotalSeconds.ToString();
+
+            dtStart = DateTime.Now;
 
             if (Success) { CleanupDataSet(); }
 
             if (!Success) { SetDataSetError(true); }
+
+            dtStop = DateTime.Now;
+
+            string sDiffDataSet = (dtStop - dtStart).TotalSeconds.ToString();
 
             return dsJson;
         }
@@ -233,29 +248,65 @@ namespace JsonToDataSet
                     //multithread...
                     if (sJsonParent.Count > 0)
                     {
-                        List<string> sNodesInList = new List<string>();
-                        foreach (var pat in sJsonParent)
+                        if (sParentNodes.Count > 1) { if (sParentNodes[1].Equals("q2")) { sParentNodes[1] = "q1"; } }
+                        int number = sJsonParent.Count;
+                        int numParts = MultiThreadComputation ? Environment.ProcessorCount : 1;
+                        int partSize = number / numParts;
+                        int remainder = number % numParts;
+
+                        List<DataSet> dsList = new List<DataSet>();
+                        List<Task> lTasks = new List<Task>();
+
+                        for (int iR = 0; iR < numParts; iR++)
                         {
-                            if (!sNodesInList.Contains(pat.NodeName))
+                            int iStart = iR * partSize;
+                            int iCount = (iR == numParts - 1 ? partSize + remainder : partSize);
+                            var JsPatterns = sJsonParent.GetRange(iStart, iCount);
+
+                            List<string> sNodesInList = new List<string>();
+                            foreach (var pat in JsPatterns)
                             {
-                                sNodesInList.Add(pat.NodeName);
+                                if (!sNodesInList.Contains(pat.NodeName))
+                                {
+                                    sNodesInList.Add(pat.NodeName);
+                                }
                             }
-                        }
-                        if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Processing " + sJsonParent.Count().ToString() + " chunk(s) on Level " + (i + 1).ToString() + " (" + string.Join(",", sNodesInList) + ")"); }
-                        //on attribue le bon node parent au niveau scanné
-                        sParentNodes.Clear();
-                        for (int iJ = 0; iJ < sJsonParent.Count; iJ++)
-                        {
-                            if (dsData != null)
+                            if (OnJsonEvent != null) { OnJsonEvent(this, "\t * [Thread ]" + iR.ToString() + "] Processing " + JsPatterns.Count().ToString() + " chunk(s) on Level " + (i + 1).ToString() + " (" + string.Join(",", sNodesInList) + ")"); }
+                            //on attribue le bon node parent au niveau scanné
+                            sParentNodes.Clear();
+                            for (int iJ = 0; iJ < JsPatterns.Count; iJ++)
                             {
-                                sParentNodes.Add(dsData.Tables[sJsonParent[iJ].ParentElement - 1].TableName);
+                                if (dsData != null)
+                                {
+                                    sParentNodes.Add(dsData.Tables[JsPatterns[iJ].ParentElement - 1].TableName);
+                                }
+                                else { sParentNodes.Add(""); }
                             }
-                            else { sParentNodes.Add(""); }
+
+                            lTasks.Add(Task.Factory.StartNew(() => dsList.Add(CreateDataTableFromJsonPatterns(JsPatterns, iStart, iLevels, sParentNodes, dsJson, cancellationToken))));
                         }
 
-                        //if (sParentNodes.Count > 1) { if (sParentNodes[1].Equals("q2")) { sParentNodes[1] = "q1"; } }
-
-                        dsData = CreateDataTableFromJsonPatterns(sJsonParent, iLevels, sParentNodes, dsJson, cancellationToken);
+                        while (lTasks.Count(t => t.IsCompleted) < lTasks.Count)
+                        {
+                            Thread.Sleep(100);
+                        }
+                        //mixer les dsList
+                        int iDs = 0;
+                        foreach (DataSet ds in dsList.Cast<DataSet>().OrderBy(dsName => dsName.DataSetName))
+                        {
+                            if (iDs == 0)
+                            { dsData = ds; }
+                            else
+                            {
+                                foreach (DataTable dt in ds.Tables) //leBonOutil{[X]}
+                                {
+                                    dsData.Tables.Add(dt.Copy());
+                                }
+                            }
+                            iDs++;
+                        }
+                        dsList.Clear();
+                        dsList = null;
 
                         if (dsData.Tables.Count > 0)
                         {
@@ -339,27 +390,90 @@ namespace JsonToDataSet
                     }
                 }
             }
+
+            //----------------------------------------------------------------------------------------------------------------------------------------------------ULTRA LONG
             //je me retrouve donc avec une liste contenant les différentes listes de tables à merger
+            List<string> sListMerge = new List<string>();
+            foreach (List<string> sL in sMergedList)
+            {
+                if (sL.Count > 0) { sListMerge.Add(string.Concat(sL[0], " : ", sL.Count.ToString(), " table(s)")); }
+            }
+            if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Merging " + dsJson.Tables.Count + " Table(s) From List (" + string.Join(",", sListMerge) + ")"); }
+
             for (int i = 0; i < sMergedList.Count; i++)
             {
-                for (int i2 = 1; i2 < sMergedList[i].Count; i2++)
+                //découplage multithread : on a une quantité de tables à merger, on répartit cette quantité en fonction du nombre de threads
+                int number = sMergedList[i].Count;
+                int numParts = MultiThreadComputation ? Environment.ProcessorCount : 1;
+                int partSize = number / numParts;
+                int remainder = number % numParts;
+
+                List<Task> lTasks = new List<Task>();
+                var sListDTToMerge = new List<string>();
+                var sListDTToRemove = new List<string>();
+
+                for (int iR = 0; iR < numParts; iR++)
                 {
-                    DataTable dt1 = dsJson.Tables[sMergedList[i][0]];
-                    DataTable dt2 = dsJson.Tables[sMergedList[i][i2]];
+                    int iStart = iR * partSize;
+                    int iCount = (iR == numParts - 1 ? partSize + remainder : partSize);
+
+                    lTasks.Add(Task.Factory.StartNew(() =>
+                    {
+                        List<string> sListRange = sMergedList[i].GetRange(iStart, iCount);
+                        if (sListRange.Count > 0) { sListDTToMerge.Add(sListRange[0]); }
+
+                        for (int i2 = 1; i2 < sListRange.Count; i2++)
+                        {
+                            DataTable dt1 = dsJson.Tables[sListRange[0]];
+                            DataTable dt2 = dsJson.Tables[sListRange[i2]];
+                            try
+                            {
+                                dt1.Merge(dt2);
+                                lock (sListDTToRemove) { sListDTToRemove.Add(sListRange[i2]); }
+                            }
+                            catch (Exception ex) //on ne merge pas
+                            {
+                                if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Merging '" + dt1.TableName + "' With '" + dt2.TableName + "' Failed : " + ex.Message); }
+                                dt2.TableName = string.Concat(dt2.TableName, "_error");
+                            }
+                        }
+                    }));
+                }
+
+                while (lTasks.Count(t => t.IsCompleted) < lTasks.Count)
+                {
+                    Thread.Sleep(100);
+                }
+
+                sListDTToRemove.Sort();
+                //suppression des tables mergées
+                foreach (string sTToRemove in sListDTToRemove)
+                {
+                    dsJson.Tables.Remove(sTToRemove);
+                }
+
+                //à ce stade, il reste autant de tables que de threads : celles-ci doivent être mergées en monothread
+                sListDTToMerge.Sort();
+
+                for (int iT = 1; iT < sListDTToMerge.Count; iT++)
+                {
+                    DataTable dt1 = dsJson.Tables[sListDTToMerge[0]];
+                    DataTable dt2 = dsJson.Tables[sListDTToMerge[iT]];
                     try
                     {
-                        //if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Merging '" + dt1.TableName + "' With '" + dt2.TableName + "'");
-
                         dt1.Merge(dt2);
-                        dsJson.Tables.Remove(sMergedList[i][i2]);
+                        dsJson.Tables.Remove(dt2.TableName);
                     }
                     catch (Exception ex) //on ne merge pas
                     {
                         if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Merging '" + dt1.TableName + "' With '" + dt2.TableName + "' Failed : " + ex.Message); }
-                        dt2.TableName = string.Concat(dt2.TableName, "_error");
+                        //dt2.TableName = string.Concat(dt2.TableName, "_error");
                     }
                 }
             }
+
+            //----------------------------------------------------------------------------------------------------------------------------------------------------ULTRA LONG
+
             //après le merge, je renomme les tables restantes en enlevant les index           
             for (int i = 0; i < dsJson.Tables.Count; i++)
             {
@@ -451,10 +565,10 @@ namespace JsonToDataSet
             return sValue;
         }
 
-        private DataSet CreateDataTableFromJsonPatterns(List<JsonPattern> jsP, int iLevels, List<string> sParentNodes, DataSet dsLevelDown, CancellationToken cancellationToken)
+        private DataSet CreateDataTableFromJsonPatterns(List<JsonPattern> jsP, int iIndexOffset, int iLevels, List<string> sParentNodes, DataSet dsLevelDown, CancellationToken cancellationToken)
         {
             bool bHasChildren = jsP.Last().Depth < iLevels;
-            DataSet dsData = new DataSet();
+            DataSet dsData = new DataSet(iIndexOffset.ToString());
             List<bool> bReferencesPrimaryKey = new List<bool>();
             List<int> iRow = new List<int>();
             int iElementInLevel = 0;
@@ -463,7 +577,7 @@ namespace JsonToDataSet
             {
                 for (int iR = 0; iR < jsP.Count; iR++)
                 {
-                    string sDtName = string.Concat(jsP[iR].NodeName.Length == 0 ? _sOutput : jsP[iR].NodeName, "{[", iR.ToString() + "]}");
+                    string sDtName = string.Concat(jsP[iR].NodeName.Length == 0 ? _sOutput : jsP[iR].NodeName, "{[", (iR + iIndexOffset).ToString() + "]}");
                     //if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Creating Datatable : " + sDtName);
                     dsData.Tables.Add(new DataTable(sDtName));
                     iRow.Add(-1);
@@ -480,7 +594,7 @@ namespace JsonToDataSet
                     string sParentName = sParentNodes[iR].Length == 0 ? _sOutput : sParentNodes[iR];
 
                     string sNode = jsP[iR].NodeName.Length == 0 ? _sOutput : jsP[iR].NodeName;
-                    int iTable = dsData.Tables.IndexOf(string.Concat(jsP[iR].NodeName.Length == 0 ? _sOutput : jsP[iR].NodeName, "{[", iR.ToString() + "]}"));
+                    int iTable = dsData.Tables.IndexOf(string.Concat(jsP[iR].NodeName.Length == 0 ? _sOutput : jsP[iR].NodeName, "{[", (iR + iIndexOffset).ToString() + "]}"));
                     iRow[iTable]++;
 
                     if (!jsP[iR].IsArray)

@@ -229,7 +229,6 @@ namespace JsonToDataSet
                 if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Json Data successfully Parsed : " + (iLevels + 1).ToString() + " level(s) detected."); }
                 if (OnJsonEvent != null) { OnJsonEvent(this, "\t * Found " + jsPatterns.Count().ToString() + " chunk(s)."); }
 
-                List<string> sParentNodes = new List<string>();
                 DataSet dsData = null;
 
                 for (int i = 0; i <= iLevels; i++)
@@ -248,7 +247,6 @@ namespace JsonToDataSet
                     //multithread...
                     if (sJsonParent.Count > 0)
                     {
-                        if (sParentNodes.Count > 1) { if (sParentNodes[1].Equals("q2")) { sParentNodes[1] = "q1"; } }
                         int number = sJsonParent.Count;
                         int numParts = MultiThreadComputation ? Environment.ProcessorCount : 1;
                         int partSize = number / numParts;
@@ -275,7 +273,11 @@ namespace JsonToDataSet
                                     sNodesInList.Add(pat.NodeName);
                                 }
                             }
-                            if (OnJsonEvent != null) { OnJsonEvent(this, "\t * [Thread ]" + iR.ToString() + "] Processing " + JsPatterns.Count().ToString() + " chunk(s) on Level " + (i + 1).ToString() + " (" + string.Join(",", sNodesInList) + ")"); }
+                            if (OnJsonEvent != null) { OnJsonEvent(this, "\t * [Thread " + (iR + 1).ToString() + "] Processing " + JsPatterns.Count().ToString() + " chunk(s) on Level " + (i + 1).ToString() + " (" + string.Join(",", sNodesInList) + ")"); }
+
+                            List<string> sParentNodes = new List<string>();
+                            if (sParentNodes.Count > 1) { if (sParentNodes[1].Equals("q2")) { sParentNodes[1] = "q1"; } }
+
                             //on attribue le bon node parent au niveau scanné
                             sParentNodes.Clear();
                             for (int iJ = 0; iJ < JsPatterns.Count; iJ++)
@@ -287,7 +289,12 @@ namespace JsonToDataSet
                                 else { sParentNodes.Add(""); }
                             }
 
-                            lTasks.Add(Task.Factory.StartNew(() => dsList.Add(CreateDataTableFromJsonPatterns(JsPatterns, iStart, iLevels, sParentNodes, dsJson, cancellationToken))));
+                            lTasks.Add(Task.Factory.StartNew(() =>
+                            {
+                                lock (dsList)
+                                { dsList.Add(CreateDataTableFromJsonPatterns(JsPatterns, iStart, iLevels, sParentNodes.ToList(), dsJson, cancellationToken)); }
+                            }
+                            ));
                         }
 
                         while (lTasks.Count(t => t.IsCompleted) < lTasks.Count)
@@ -428,7 +435,14 @@ namespace JsonToDataSet
                     lTasks.Add(Task.Factory.StartNew(() =>
                     {
                         List<string> sListRange = sMergedList[i].GetRange(iStart, iCount);
-                        if (sListRange.Count > 0) { sListDTToMerge.Add(sListRange[0]); }
+
+                        if (sListRange.Count > 0)
+                        {
+                            lock (sListDTToMerge)
+                            {
+                                sListDTToMerge.Add(sListRange[0]);
+                            }
+                        }
 
                         for (int i2 = 1; i2 < sListRange.Count; i2++)
                         {

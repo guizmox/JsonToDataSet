@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Authors>Guillaume Tristant</Authors>
+    <Company />
+    <Product>Json To DataSet</Product>
+    <Description>This is a C# Json Parser that converts Json data as a DataSet</Description>
+  </PropertyGroup>
+
+</Project>

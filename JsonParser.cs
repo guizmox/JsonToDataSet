@@ -254,6 +254,10 @@ namespace JsonToDataSet
                         int partSize = number / numParts;
                         int remainder = number % numParts;
 
+                        //en cas de trop de threads pour la quantité à calculer
+                        if (partSize == 0)
+                        { numParts = 1; }
+
                         List<DataSet> dsList = new List<DataSet>();
                         List<Task> lTasks = new List<Task>();
 
@@ -407,6 +411,10 @@ namespace JsonToDataSet
                 int numParts = MultiThreadComputation ? Environment.ProcessorCount : 1;
                 int partSize = number / numParts;
                 int remainder = number % numParts;
+
+                //en cas de trop de threads pour la quantité à calculer
+                if (partSize == 0)
+                { numParts = 1; }
 
                 List<Task> lTasks = new List<Task>();
                 var sListDTToMerge = new List<string>();

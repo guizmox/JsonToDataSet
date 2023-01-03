@@ -13,14 +13,11 @@ namespace ConsoleApp1
     {
         static void Main(string[] args)
         {
-            // @"C:\Users\Public\Documents\Fuzible\FILES\direct-messages.js"
-            string sFile = @"C:\Users\Public\Documents\Fuzible\FILES\ad-engagements.js";
-            string cLoutilJson = File.ReadAllText(sFile);
-
-            JsonParser jsp = new JsonParser(cLoutilJson, "leBonOutil");
+            string sFile = @"C:\TOOLS\myJsonFile.js";
+            string sJsonData = File.ReadAllText(sFile);
+            JsonParser jsp = new JsonParser(sJsonData, "MyFile");
             jsp.MultiThreadComputation = true;
-            DataSet dsLoutil = jsp.JsonToDataSet();
-
+            DataSet dsResult = jsp.JsonToDataSet();
         }
     }
 }

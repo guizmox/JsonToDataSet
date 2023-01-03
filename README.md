@@ -9,10 +9,18 @@ using System.IO;
 
 namespace ConsoleApp1
 {
-  string sFile = @"C:\Tools\myJsonFile.js";
-  string sJsonData = File.ReadAllText(sFile);
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // @"C:\Users\Public\Documents\Fuzible\FILES\direct-messages.js"
+            string sFile = @"C:\Users\Public\Documents\Fuzible\FILES\ad-engagements.js";
+            string cLoutilJson = File.ReadAllText(sFile);
 
-  JsonParser jsp = new JsonParser(sJsonData, "MyJsonData");
-  jsp.MultiThreadComputation = true;
-  DataSet dsResult = jsp.JsonToDataSet();
+            JsonParser jsp = new JsonParser(cLoutilJson, "leBonOutil");
+            jsp.MultiThreadComputation = true;
+            DataSet dsLoutil = jsp.JsonToDataSet();
+
+        }
+    }
 }
